@@ -1,0 +1,113 @@
+# ASP.NET Core
+# Build and test ASP.NET Core projects targeting .NET Core.
+# Add steps that run tests, create a NuGet package, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+
+trigger:
+  - master
+  - develop
+
+pool:
+  vmImage: ubuntu-latest
+variables:
+  buildConfiguration: 'Release'
+  
+stages:
+
+- stage: BuildPublishRunNotification
+  displayName: 'Build, publish, run app and send notification.'
+  variables:
+  - group: VG_TransferFilesToMongoDBApp
+  jobs:
+    - job: BuildAndPublish
+      displayName: "BuildAndPublish"
+      steps:
+        - task: UseDotNet@2
+          inputs:
+            version: '3.1.x'
+            packageType: runtime
+
+        - task: DotNetCoreCLI@2
+          displayName: Restore
+          inputs:
+            command: 'restore'
+            projects: 'TransferFilesToMongoDBApp/TransferFilesToMongoDBApp/TransferFilesToMongoDBApp.csproj'
+            arguments: '--configuration $(buildConfiguration)'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/TransferFilesToMongoDBApp'
+
+        - task: DotNetCoreCLI@2
+          displayName: Build
+          inputs:
+            command: 'build'
+            projects: 'TransferFilesToMongoDBApp/TransferFilesToMongoDBApp/TransferFilesToMongoDBApp.csproj'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/TransferFilesToMongoDBApp'
+            
+        - task: DotNetCoreCLI@2
+          displayName: 'publish'
+          inputs: 
+            command: 'publish'
+            publishWebProjects: false
+            projects: 'TransferFilesToMongoDBApp/TransferFilesToMongoDBApp/TransferFilesToMongoDBApp.csproj'
+            arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+            workingDirectory: '$(System.DefaultWorkingDirectory)/TransferFilesToMongoDBApp/TransferFilesToMongoDBApp'
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: 'TransferFilesToMongoDBApp'
+
+    - job: Run
+      displayName: "Run app"
+      dependsOn: BuildAndPublish
+      steps:
+        - task: DownloadBuildArtifacts@0
+          inputs:
+            buildType: 'current'
+            downloadType: 'single'
+            artifactName: 'TransferFilesToMongoDBApp'
+            downloadPath: '$(System.ArtifactsDirectory)'
+
+        - task: ExtractFiles@1
+          inputs:
+            archiveFilePatterns: '$(System.ArtifactsDirectory)/TransferFilesToMongoDBApp/*.zip' 
+            destinationFolder: '$(System.ArtifactsDirectory)/dst'
+
+        - task: CopyFiles@2
+          inputs:
+            Contents: |
+              templates/**
+            TargetFolder: '$(System.ArtifactsDirectory)/dst'
+
+        - task: CmdLine@2
+          displayName: 'run'
+          continueOnError: true
+          inputs:
+            script: |
+              dotnet TransferFilesToMongoDBApp.dll -c "$(MongoDBConnectionString)" -p "$(PathToTemplatesFolder)" 
+            workingDirectory: '$(System.ArtifactsDirectory)/dst'
+
+    - job: SuccessNotification
+      displayName: "Send success notification to Microsoft Teams."
+      dependsOn: Run
+      condition: eq(dependencies.Run.result,'Succeeded')
+      steps:
+        - task: CmdLine@2
+          displayName: 'notification (successful)'
+          inputs:
+            script: |
+              curl -H "Content-Type:application/json" -d "{'text':'Templates have been added/updated successfully.'}" $(MSTeamsWebhookUrl)
+            workingDirectory: '$(System.DefaultWorkingDirectory)'   
+
+    - job: FailedNotification
+      displayName: "Send failed notification to Microsoft Teams."
+      dependsOn: Run
+      condition: or(eq(dependencies.Run.result,'SucceededWithIssues'), eq(dependencies.Run.result,'Failed'))
+      steps:
+        - task: CmdLine@2
+          displayName: 'notification (failed)'
+          inputs:
+            script: |
+              curl -H "Content-Type:application/json" -d "{'text':'Error while adding/updating templates.'}" $(MSTeamsWebhookUrl)
+            workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+          

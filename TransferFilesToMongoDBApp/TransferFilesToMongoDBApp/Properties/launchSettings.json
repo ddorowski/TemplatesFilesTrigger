@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TransferFilesToMongoDBApp": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}
